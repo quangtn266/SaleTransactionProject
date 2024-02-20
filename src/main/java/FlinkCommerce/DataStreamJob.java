@@ -79,7 +79,132 @@ public class DataStreamJob {
 
         // create sales_per_category table sink
         transactionStream.addSink(JdbcSink.sink(
+            "CREATE TABLE IF NOT EXISTS sales_per_day (" +
+                    "transaction_date DATE PRIMARY KEY, " +
+                    "total_sales DOUBLE PRECISION " +
+                    ")",
+                (JdbcStatementBuilder<Transaction>) (preparedStatement, transaction) -> {
 
-        ))
+                },
+                execOptions,
+                connOptions,
+        )).name("Create Sales per day table");
+
+        // create sales_per_month table sink
+        transactionStream.addSink(JdbcSink.sink(
+                "CREATE TABLE IF NOT EXISTS sales_per_month (" +
+                        "year INTEGER, " +
+                        "month INTEGER, " +
+                        "total_sales DOUBLE PRECISION, " +
+                        "PRIMARY KEY (year, month)" +
+                        ")",
+                (JdbcStatementBuilder<Transaction>) (preparedStatement, transaction) -> {
+
+                },
+                execOptions,
+                connOptions,
+        )).name("Create Sales per month table");
+
+        transactionStream.addSink(JdbcSink.sink(
+                "INSERT INTO transactions(transaction_id, product_id, product_name, product_category, product_price, " +
+                        "product_quantity, product_brand, total_amount, currency, customer_id, transaction_date, payment_method) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                        "ON CONFLICT (transaction_id) DO UPDATE SET " +
+                        "product_id = EXCLUDED.product_id, " +
+                        "product_name = EXCLUDED.product_name, " +
+                        "product_category = EXCLUDED.product_category, " +
+                        "product_price = EXCLUDED.product_price, " +
+                        "product_quantity = EXCLUDED.product_quantity, " +
+                        "product_brand = EXCLUDED.product_brand, " +
+                        "total_amount = EXCLUDED.total_amount, " +
+                        "currency = EXCLUDED.currency, " +
+                        "customer_id = EXCLUDED.customer_id, " +
+                        "transaction_date = EXCLUDED.transaction_date, " +
+                        "payment_method = EXCLUDED.payment_method " +
+                        "WHERE transactions.transaction_id = EXCLUDED.transaction_id",
+                (JdbcStatementBuilder<Transaction>) (preparedStatement, transaction) -> {
+                    preparedStatement.setString(1, transaction.getTransactionId());
+                    preparedStatement.setString(2, transaction.getProductId());
+                    preparedStatement.setString(3, transaction.getProductName());
+                    preparedStatement.setString(4, transaction.getProductCategory());
+                    preparedStatement.setDouble(5, transaction.getProductPrice());
+                    preparedStatement.setInt(6, transaction.getProductQuantity());
+                    preparedStatement.setString(7, transaction.getProductQuantity());
+                    preparedStatement.setDouble(8, transaction.getTotalAmount());
+                    preparedStatement.setString(9, transaction.getCurrency());
+                    preparedStatement.setString(10, transaction.getCustomerId());
+                    preparedStatement.setTimestamp(11, transaction.getTransactionDate());
+                    preparedStatement.setString(12, transaction.getPaymentMethod());
+                },
+                execOptions,
+                connOptions,
+        )).name("Insert into transactions table sink");
+
+        transactionStream.map(
+                transaction -> {
+                    Date transactionDate = new Date(System.currentTimeMillis());
+                    String category = transaction.getProductCategory();
+                    double totalSales = transaction.getTotalAmount();
+                    return new SalesPerCategory(transactionDate, category, totalSales);
+                }
+        ).keyBy(SalesPerCategory::getCategory)
+                .reduce((salesPerCategory, t1) -> {
+            salesPerCategory.setTotalSales(salesPerCategory.getTotalSales()+t1.getTotalSales());
+            return salesPerCategory;
+        }).addSink(JdbcSink.sink(
+                "INSERT INTO sales_per_category(transaction_date, category, total_sales) " +
+                        "VALUES (?, ?, ?) " +
+                        "ON CONFLICT (transaction_date, category) DO UPDATE SET " +
+                        "total_sales = EXCLUDED.total_sales " +
+                        "WHERE sales_per_category.category = EXCLUDED.category " +
+                        "AND sales_per_category.transaction_date = EXCLUDED.transaction_date",
+                        (JdbcStatementBuilder<Object>) (preparedStatement, salesPerCategory) -> {
+                            preparedStatement.setDate(1, new Date(System.currentTimeMillis()));
+                            preparedStatement.setString(2, salesPerCategory.getCategory());
+                            preparedStatement.setDouble(3, salesPerCategory.getTotalSales());
+                        },
+                        execOptions,
+                        connOptions
+                )).name("Insert into sales per category table");
+
+        transactionStream.map(
+                transaction -> {
+                    Date transactionDate = new Date(System.currentTimeMillis());
+                    double totalSales = transaction.getTotalAmount();
+                    return new SalesPerDay(transactionDate, totalSales);
+                }
+        ).keyBy(SalesPerDay::getTransactionDate)
+                .reduce((salesPerDay, t1) -> {
+            salesPerDay.setTotalSales(salesPerDay.getTotalSales() + t1.getTotalSales());
+            return salesPerDay;
+        }).addSink(JdbcSink.sink(
+                "INSERT INTO sales_per_day(transaction_date, total_sales) " +
+                        "VALUES (?,?) " +
+                        "ON CONFLICT (transaction_date) DO UPDATE SET " +
+                        "total_sales = EXCLUDED.total_sales " +
+                        "WHERE sales_per_day.transaction_date = EXCLUDED.transaction_date",
+                        (JdbcStatementBuilder<SalesPerDay>) (preparedStatement, salesPerday) -> {
+                            preparedStatement.setDate(1, new Date(System.currentTimeMillis()));
+                            preparedStatement.setDouble(2, salesPerday.getTotalSales());
+                        } ,
+                execOptions,
+                connOptions
+                )).name("Insert into sales per day table");
+
+        transactionStream.map(
+                transaction -> {
+                    Date transactionDate = new Date(System.currentTimeMillis());
+                    int year = transactionDate.toLocalDate().getYear();
+                    int month = transactionDate.toLocalDate().getMonth().getValue();
+                    double totalSales = transaction.getTotalAmount();
+                    return new SalesPerMonth(year, month, totalSales);
+                }
+        ).keyBy(SalesPerMonth::getMonth)
+                .reduce((salesPerMonth, t1) -> {
+                    salesPerMonth.setTotalSales(salesPerMonth.getTotalSales() + t1.getTotalSales());
+                    return salesPerMonth;
+                }).addSink(JdbcSink.sink(
+
+                ))
     }
 }
